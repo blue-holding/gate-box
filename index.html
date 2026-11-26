@@ -41,7 +41,7 @@ h1 span{color:var(--cyan)}
 .stage{
   --yaw:-34deg;--pitch:-10deg;
   position:relative;height:clamp(460px,68vw,720px);
-  perspective:1700px;perspective-origin:50% 28%;
+  perspective:1700px;perspective-origin:50% 50%;
   overflow:hidden;border-radius:20px;border:1px solid var(--line);
   background:
     radial-gradient(ellipse 60% 45% at 50% 38%,rgba(246,213,138,.10),transparent 70%),
@@ -49,7 +49,7 @@ h1 span{color:var(--cyan)}
   touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none;
 }
 .stage.dragging{cursor:grabbing}
-.fit{position:absolute;left:50%;top:56%;transform-style:preserve-3d;transform:scale(var(--s,1))}
+.fit{position:absolute;left:50%;top:50%;transform-style:preserve-3d;transform:translate(var(--cx,0px),var(--cy,0px)) scale(var(--s,1));transition:transform 1.4s cubic-bezier(.45,0,.2,1)}
 .rig{position:absolute;transform-style:preserve-3d;transform:rotateX(var(--pitch)) rotateY(var(--yaw));transition:transform 1.4s cubic-bezier(.22,.8,.25,1)}
 .box{position:absolute;transform-style:preserve-3d}
 .f{position:absolute;box-sizing:border-box;overflow:hidden;backface-visibility:hidden;-webkit-backface-visibility:hidden}
@@ -522,11 +522,21 @@ h2{font-family:var(--display);font-stretch:118%;font-weight:800;font-size:clamp(
   let hintT;
   function hint(t,ms){hintEl.textContent=t;clearTimeout(hintT);hintEl.classList.toggle('on',!!ms);if(ms)hintT=setTimeout(()=>{hintEl.textContent=HINTS[state];hintEl.classList.remove('on')},ms)}
   const go=document.getElementById('go'),cap=document.getElementById('cap');
-  function applyCam(){
-    const c=cams[state];
-    const p=Math.max(-62,Math.min(8,c.p+offP));
-    stage.style.setProperty('--yaw',(c.y+offY)+'deg');
-    stage.style.setProperty('--pitch',p+'deg');
+  function camTarget(){const c=cams[state];return {y:c.y+offY,p:Math.max(-62,Math.min(8,c.p+offP))}}
+  let curY=0,curP=0,raf=0;
+  function setCamVars(y,p){stage.style.setProperty('--yaw',y.toFixed(2)+'deg');stage.style.setProperty('--pitch',p.toFixed(2)+'deg')}
+  /* step changes: jump the target and let the CSS transition carry the camera */
+  function applyCam(){if(raf){cancelAnimationFrame(raf);raf=0;stage.classList.remove('dragging')}const t=camTarget();curY=t.y;curP=t.p;setCamVars(curY,curP)}
+  /* dragging: ease the camera toward where the pointer wants it, every frame, so turning glides and settles softly */
+  function glide(){
+    if(raf)return;
+    stage.classList.add('dragging');
+    const step=()=>{
+      const t=camTarget();curY+=(t.y-curY)*.12;curP+=(t.p-curP)*.12;setCamVars(curY,curP);
+      if(drag||Math.abs(t.y-curY)>.03||Math.abs(t.p-curP)>.03)raf=requestAnimationFrame(step);
+      else{raf=0;stage.classList.remove('dragging');later(recenter,250)}
+    };
+    raf=requestAnimationFrame(step);
   }
   function setState(s){
     setOut(null);
@@ -548,6 +558,7 @@ h2{font-family:var(--display);font-stretch:118%;font-weight:800;font-size:clamp(
     tongue.style.transform=`translate3d(0px,${DH/2-7}px,${D/2}px)`;
     go.textContent=labels[s];cap.textContent=caps[s];
     hint(HINTS[s]);
+    later(recenter,2400);                       // one gentle re-centre once the step has settled
     document.querySelectorAll('.chip').forEach(b=>{if(+b.dataset.s===s)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current')});
     applyCam();
   }
@@ -587,6 +598,7 @@ h2{font-family:var(--display);font-stretch:118%;font-weight:800;font-size:clamp(
     if(x==='mug'){mugG.style.transform=MOUT;mugS.classList.add('sway')}
     else if(x==='key'){keyDrop.style.transitionDelay='0s';keyDrop.style.transform=KEYOUT;keyDrop.classList.add('out')}
     else if(x&&x.startsWith('pack')){const i=+x.slice(4);cartons[i].style.transform=packOut}
+    later(recenter,900);
   }
   function nudge(){
     [doorL,doorR].forEach((d,k)=>{d.style.transition='transform .12s';d.style.transitionDelay='0s';d.style.transform=`translateZ(${D/2}px) rotateY(${k?2:-2}deg)`});
@@ -623,11 +635,12 @@ h2{font-family:var(--display);font-stretch:118%;font-weight:800;font-size:clamp(
       keyBar.style.transform=keyTf(drag.kx);return;
     }
     if(Math.hypot(e.clientX-drag.x0,e.clientY-drag.y0)>6)drag.moved=true;
-    offY+=(e.clientX-drag.x)*.35;offP-=(e.clientY-drag.y)*.25;drag.x=e.clientX;drag.y=e.clientY;applyCam();
+    offY+=(e.clientX-drag.x)*.35;offP-=(e.clientY-drag.y)*.25;drag.x=e.clientX;drag.y=e.clientY;glide();
   });
   const end=e=>{
     if(!drag)return;const d=drag;drag=null;
-    stage.classList.remove('dragging','keydrag');
+    stage.classList.remove('keydrag');
+    if(!raf)stage.classList.remove('dragging');   // otherwise the glide loop removes it once the camera settles
     if(d.mode==='key'){
       keyBar.style.transition='';
       const tapped=e&&Math.hypot(e.clientX-d.x0,e.clientY-d.y0)<6;
@@ -640,7 +653,20 @@ h2{font-family:var(--display);font-stretch:118%;font-weight:800;font-size:clamp(
   stage.addEventListener('pointerup',end);stage.addEventListener('pointercancel',end);
 
   /* fit to stage */
-  function fit(){const s=Math.min(1,stage.clientWidth/800,stage.clientHeight/940);fitEl.style.setProperty('--s',s.toFixed(3))}
+  function fit(){const s=Math.min(1,stage.clientWidth/800,stage.clientHeight/940);fitEl.style.setProperty('--s',s.toFixed(3));later(recenter,50)}
+  /* keep whatever is on screen (box, open doors, drawer, key, items taken out) centred in the stage:
+     measure the projected faces and shift the whole scene by the difference */
+  const vis=[...document.querySelectorAll('#box .f')].filter(f=>!/\b(shadow|burst|seam)\b/.test(f.className));
+  let cx=0,cy=0,rt=0,lastRc=0;
+  function recenter(){
+    const s=stage.getBoundingClientRect();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+    for(const f of vis){const r=f.getBoundingClientRect();if(r.width<.5&&r.height<.5)continue;if(r.left<x0)x0=r.left;if(r.top<y0)y0=r.top;if(r.right>x1)x1=r.right;if(r.bottom>y1)y1=r.bottom}
+    if(x1<x0)return;
+    cx+=(s.left+s.width/2)-(x0+x1)/2;cy+=(s.top+s.height/2)-(y0+y1)/2;
+    cx=Math.max(-s.width/2,Math.min(s.width/2,cx));cy=Math.max(-s.height/2,Math.min(s.height/2,cy));
+    fitEl.style.setProperty('--cx',cx.toFixed(1)+'px');fitEl.style.setProperty('--cy',cy.toFixed(1)+'px');
+  }
+  function later(fn,ms){clearTimeout(rt);rt=setTimeout(fn,ms)}
   window.addEventListener('resize',fit);fit();
   setState(0);
 })();
